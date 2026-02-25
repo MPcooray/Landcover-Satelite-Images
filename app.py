@@ -24,6 +24,10 @@ def load_model():
 
 model = load_model()
 
+# Backbone and classifier separation
+base_model = model.layers[0]   # MobileNetV2
+classifier_layers = model.layers[1:]  # GAP + Dropout + Dense
+
 # -----------------------------
 # Preprocess
 # -----------------------------
@@ -34,28 +38,36 @@ def preprocess_image(image):
     return img_array.astype(np.float32)
 
 # -----------------------------
-# Grad-CAM FIXED
+# Grad-CAM SAFE VERSION
 # -----------------------------
-def make_gradcam_heatmap(img_array, model):
+def make_gradcam_heatmap(img_array):
 
-    base_model = model.layers[0]  # MobileNetV2 backbone
     last_conv_layer = base_model.get_layer("out_relu")
 
-    grad_model = tf.keras.models.Model(
-        inputs=model.input,
-        outputs=[last_conv_layer.output, model.output]
+    # Model that outputs conv features
+    conv_model = tf.keras.models.Model(
+        inputs=base_model.input,
+        outputs=last_conv_layer.output
     )
 
+    # Forward pass through backbone
     with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(img_array)
-        pred_index = tf.argmax(predictions[0])
-        class_channel = predictions[:, pred_index]
+        conv_output = conv_model(img_array)
+        tape.watch(conv_output)
 
-    grads = tape.gradient(class_channel, conv_outputs)
+        # Manually forward through classifier
+        x = conv_output
+        for layer in classifier_layers:
+            x = layer(x)
+
+        pred_index = tf.argmax(x[0])
+        class_channel = x[:, pred_index]
+
+    grads = tape.gradient(class_channel, conv_output)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
 
-    conv_outputs = conv_outputs[0]
-    heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+    conv_output = conv_output[0]
+    heatmap = conv_output @ pooled_grads[..., tf.newaxis]
     heatmap = tf.squeeze(heatmap)
 
     heatmap = tf.maximum(heatmap, 0) / tf.reduce_max(heatmap)
@@ -90,7 +102,7 @@ if uploaded_file:
         })
         st.bar_chart(df.set_index("Class"))
 
-    heatmap = make_gradcam_heatmap(img_array, model)
+    heatmap = make_gradcam_heatmap(img_array)
 
     heatmap = cv2.resize(heatmap, (IMG_SIZE, IMG_SIZE))
     heatmap = np.uint8(255 * heatmap)
