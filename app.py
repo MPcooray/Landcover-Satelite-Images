@@ -18,8 +18,7 @@ with open("class_names.json", "r") as f:
 # Load model (cached for performance)
 @st.cache_resource
 def load_model():
-    model = keras.models.load_model("landcover_mobilenet_finetuned.keras")
-    return model
+    return tf.keras.models.load_model("landcover_model.h5")
 
 model = load_model()
 
