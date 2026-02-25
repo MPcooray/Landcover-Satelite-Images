@@ -1,12 +1,13 @@
 import streamlit as st
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
+from tensorflow.keras.preprocessing import image
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from PIL import Image
 import json
 import os
-st.write(os.listdir())
+
+st.set_page_config(page_title="Satellite Land Cover Classification")
 st.set_page_config(page_title="Satellite Land Cover Classification", layout="centered")
 
 st.title("🌍 Satellite Land Cover Classification")
