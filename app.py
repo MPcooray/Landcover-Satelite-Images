@@ -16,29 +16,19 @@ CLASS_NAMES = [
 IMG_SIZE = 224
 
 # -----------------------------
-# Load Saved Sequential Model
+# Load model
 # -----------------------------
 @st.cache_resource
 def load_model():
-    seq_model = tf.keras.models.load_model("mobilenet_landcover.keras")
-
-    # Extract backbone + classifier layers
-    backbone = seq_model.layers[0]
-    gap = seq_model.layers[1]
-    dropout = seq_model.layers[2]
-    dense = seq_model.layers[3]
-
-    # Rebuild clean Functional model
-    inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
-    x = backbone(inputs)
-    x = gap(x)
-    x = dropout(x)
-    outputs = dense(x)
-
-    clean_model = tf.keras.Model(inputs, outputs)
-    return clean_model
+    return tf.keras.models.load_model("mobilenet_landcover.keras")
 
 model = load_model()
+
+# Extract backbone and classifier
+backbone = model.layers[0]
+gap = model.layers[1]
+dropout = model.layers[2]
+dense = model.layers[3]
 
 # -----------------------------
 # Preprocess
@@ -50,28 +40,37 @@ def preprocess_image(image):
     return img_array.astype(np.float32)
 
 # -----------------------------
-# Grad-CAM (Now Safe)
+# Grad-CAM (Stable Version)
 # -----------------------------
 def make_gradcam_heatmap(img_array):
 
-    last_conv_layer = model.get_layer("mobilenetv2_1.00_224").get_layer("out_relu")
+    # Get last conv layer from backbone
+    last_conv_layer = backbone.get_layer("out_relu")
 
-    grad_model = tf.keras.models.Model(
-        inputs=model.input,
-        outputs=[last_conv_layer.output, model.output]
+    # Create a model from backbone input to last conv output
+    conv_model = tf.keras.Model(
+        inputs=backbone.input,
+        outputs=last_conv_layer.output
     )
 
     with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(img_array)
+        conv_output = conv_model(img_array)
+        tape.watch(conv_output)
+
+        # Forward pass through classifier manually
+        x = gap(conv_output)
+        x = dropout(x)
+        predictions = dense(x)
+
         pred_index = tf.argmax(predictions[0])
         loss = predictions[:, pred_index]
 
-    grads = tape.gradient(loss, conv_outputs)
+    grads = tape.gradient(loss, conv_output)
 
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    conv_outputs = conv_outputs[0]
+    conv_output = conv_output[0]
 
-    heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
+    heatmap = tf.reduce_sum(conv_output * pooled_grads, axis=-1)
 
     heatmap = tf.maximum(heatmap, 0)
     heatmap /= tf.reduce_max(heatmap)
