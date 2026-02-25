@@ -1,58 +1,84 @@
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-
 import streamlit as st
 import numpy as np
+import tensorflow as tf
+import cv2
+import pandas as pd
 from PIL import Image
+from tensorflow.keras.models import Model
+
+# -------------------------------
+# CONFIG
+# -------------------------------
+st.set_page_config(page_title="Land Cover AI", layout="wide")
 
 IMG_SIZE = 224
-NUM_CLASSES = 10
 
 class_names = [
-    'AnnualCrop', 'Forest', 'HerbaceousVegetation',
-    'Highway', 'Industrial', 'Pasture',
-    'PermanentCrop', 'Residential', 'River', 'SeaLake'
+    "AnnualCrop",
+    "Forest",
+    "HerbaceousVegetation",
+    "Highway",
+    "Industrial",
+    "Pasture",
+    "PermanentCrop",
+    "Residential",
+    "River",
+    "SeaLake"
 ]
 
-# -----------------------------
-# Load Model (Lazy Import TF)
-# -----------------------------
+# -------------------------------
+# LOAD MODEL
+# -------------------------------
 @st.cache_resource
 def load_model():
-
-    import tensorflow as tf
-    from tensorflow.keras.applications import MobileNetV2
-    from tensorflow.keras import layers, models
-
-    base_model = MobileNetV2(
-        weights='imagenet',
-        include_top=False,
-        input_shape=(IMG_SIZE, IMG_SIZE, 3)
-    )
-
-    model = models.Sequential([
-        base_model,
-        layers.GlobalAveragePooling2D(),
-        layers.Dropout(0.5),
-        layers.Dense(NUM_CLASSES, activation='softmax')
-    ])
-
-    model.load_weights("mobilenet_landcover.weights.h5")
-
+    model = tf.keras.models.load_model("mobilenet_landcover.keras")
     return model
-
-# -----------------------------
-# Streamlit UI
-# -----------------------------
-st.set_page_config(page_title="Land Cover Classification")
-st.title("Satellite Land Cover Classification")
 
 model = load_model()
 
-st.success("Model loaded successfully!")
+# -------------------------------
+# GRAD-CAM FUNCTION
+# -------------------------------
+def make_gradcam_heatmap(img_array, model, last_conv_layer_name="Conv_1"):
+    grad_model = Model(
+        inputs=model.inputs,
+        outputs=[model.get_layer(last_conv_layer_name).output, model.output],
+    )
 
-uploaded_file = st.file_uploader("Upload Image", type=["jpg","jpeg","png"])
+    with tf.GradientTape() as tape:
+        conv_outputs, predictions = grad_model(img_array)
+        class_idx = tf.argmax(predictions[0])
+        loss = predictions[:, class_idx]
+
+    grads = tape.gradient(loss, conv_outputs)
+
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    conv_outputs = conv_outputs[0]
+
+    heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+    heatmap = tf.squeeze(heatmap)
+
+    heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
+    return heatmap.numpy()
+
+# -------------------------------
+# UI HEADER
+# -------------------------------
+st.markdown(
+    "<h1 style='text-align:center;'>🛰 Satellite Land Cover Classification</h1>",
+    unsafe_allow_html=True
+)
+
+st.markdown("---")
+
+# -------------------------------
+# LAYOUT
+# -------------------------------
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("📤 Upload Image")
+    uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
 
@@ -62,12 +88,41 @@ if uploaded_file is not None:
     img_array = np.array(img_resized) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
 
-    st.image(img, caption="Uploaded Image", use_column_width=True)
-
     preds = model.predict(img_array)
     class_idx = np.argmax(preds[0])
     confidence = np.max(preds[0])
 
-    st.subheader("Prediction")
-    st.write(f"Class: **{class_names[class_idx]}**")
-    st.write(f"Confidence: **{confidence:.4f}**")
+    with col1:
+        st.image(img, caption="Uploaded Image", use_column_width=True)
+
+    with col2:
+        st.subheader("🤖 Prediction Result")
+        st.success(f"Predicted Class: **{class_names[class_idx]}**")
+        st.metric("Confidence", f"{confidence * 100:.2f}%")
+
+        # Probability chart
+        df = pd.DataFrame({
+            "Class": class_names,
+            "Probability": preds[0]
+        })
+
+        st.subheader("📊 Class Probabilities")
+        st.bar_chart(df.set_index("Class"))
+
+    # -------------------------------
+    # GRAD-CAM VISUALIZATION
+    # -------------------------------
+    heatmap = make_gradcam_heatmap(img_array, model, "Conv_1")
+
+    heatmap = cv2.resize(heatmap, (img.size[0], img.size[1]))
+    heatmap = np.uint8(255 * heatmap)
+
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    superimposed_img = heatmap * 0.4 + np.array(img)
+
+    st.markdown("---")
+    st.subheader("🔥 Grad-CAM Visualization")
+    st.image(superimposed_img.astype(np.uint8), use_column_width=True)
+
+else:
+    st.info("Upload a satellite image to begin.")
