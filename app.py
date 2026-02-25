@@ -1,125 +1,54 @@
 import streamlit as st
-import tensorflow as tf
 import numpy as np
-import cv2
-import pandas as pd
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from PIL import Image
+import json
 
-# --------------------------------
-# Page Config
-# --------------------------------
-st.set_page_config(
-    page_title="Satellite Land Cover AI",
-    layout="wide"
-)
+st.set_page_config(page_title="Satellite Land Cover Classification", layout="centered")
 
-CLASS_NAMES = [
-    'AnnualCrop', 'Forest', 'HerbaceousVegetation',
-    'Highway', 'Industrial', 'Pasture',
-    'PermanentCrop', 'Residential', 'River', 'SeaLake'
-]
+st.title("🌍 Satellite Land Cover Classification")
+st.write("Upload a satellite image to classify land cover type.")
 
-IMG_SIZE = 224
+# Load class names
+with open("class_names.json", "r") as f:
+    class_names = json.load(f)
 
-# --------------------------------
-# Load Model (Full Saved Model)
-# --------------------------------
+# Load model (cached for performance)
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model(
-        "FINAL_DEPLOY_MODEL.keras",
-        compile=False
-    )
+    model = keras.models.load_model("landcover_mobilenet_finetuned.keras")
+    return model
 
 model = load_model()
 
-# --------------------------------
-# Image Preprocessing
-# --------------------------------
-def preprocess_image(image):
-    image = image.resize((IMG_SIZE, IMG_SIZE))
-    img_array = np.array(image) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
-    return img_array.astype(np.float32)
+IMG_SIZE = 224
 
-# --------------------------------
-# Grad-CAM
-# --------------------------------
-def make_gradcam_heatmap(img_array):
+uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
 
-    # Automatically find last Conv2D layer
-    last_conv_layer = None
-    for layer in reversed(model.layers):
-        if isinstance(layer, tf.keras.layers.Conv2D):
-            last_conv_layer = layer
-            break
-
-    grad_model = tf.keras.models.Model(
-        inputs=model.inputs,
-        outputs=[last_conv_layer.output, model.output]
-    )
-
-    with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(img_array)
-        pred_index = tf.argmax(predictions[0])
-        loss = predictions[:, pred_index]
-
-    grads = tape.gradient(loss, conv_outputs)
-
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    conv_outputs = conv_outputs[0]
-
-    heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
-
-    heatmap = tf.maximum(heatmap, 0)
-    heatmap /= tf.reduce_max(heatmap)
-
-    return heatmap.numpy()
-
-# --------------------------------
-# UI
-# --------------------------------
-st.title("🛰️ Satellite Land Cover Classification with Grad-CAM")
-
-uploaded_file = st.file_uploader(
-    "Upload a Satellite Image",
-    type=["jpg", "jpeg", "png"]
-)
-
-if uploaded_file:
+if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("RGB")
-    img_array = preprocess_image(image)
+    st.image(image, caption="Uploaded Image", use_column_width=True)
 
+    # Preprocess
+    img = image.resize((IMG_SIZE, IMG_SIZE))
+    img_array = np.array(img)
+    img_array = preprocess_input(img_array)
+    img_array = np.expand_dims(img_array, axis=0)
+
+    # Prediction
     predictions = model.predict(img_array)
-    pred_index = np.argmax(predictions[0])
-    confidence = float(np.max(predictions[0]))
+    predicted_class = np.argmax(predictions[0])
+    confidence = np.max(predictions[0])
 
-    col1, col2 = st.columns(2)
+    st.subheader("Prediction:")
+    st.success(f"{class_names[predicted_class]}")
 
-    # ---- Left Side ----
-    with col1:
-        st.image(image, use_container_width=True)
-        st.markdown(f"### Prediction: `{CLASS_NAMES[pred_index]}`")
-        st.markdown(f"### Confidence: `{confidence:.4f}`")
+    st.subheader("Confidence:")
+    st.write(f"{confidence * 100:.2f}%")
 
-        df = pd.DataFrame({
-            "Class": CLASS_NAMES,
-            "Probability": predictions[0]
-        })
-
-        st.bar_chart(df.set_index("Class"))
-
-    # ---- Right Side (Grad-CAM) ----
-    heatmap = make_gradcam_heatmap(img_array)
-
-    heatmap = cv2.resize(heatmap, (IMG_SIZE, IMG_SIZE))
-    heatmap = np.uint8(255 * heatmap)
-    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-
-    img_np = np.array(image.resize((IMG_SIZE, IMG_SIZE)))
-    superimposed_img = heatmap * 0.4 + img_np
-    superimposed_img = np.uint8(superimposed_img)
-
-    with col2:
-        st.image(superimposed_img, use_container_width=True)
-        st.markdown("🔥 Red regions show where the model focuses.")
+    # Show probabilities
+    st.subheader("Class Probabilities:")
+    for i, prob in enumerate(predictions[0]):
+        st.write(f"{class_names[i]}: {prob * 100:.2f}%")
