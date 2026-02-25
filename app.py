@@ -4,6 +4,8 @@ import numpy as np
 import cv2
 import pandas as pd
 from PIL import Image
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras import layers, models
 
 st.set_page_config(page_title="Satellite Land Cover AI", layout="wide")
 
@@ -16,19 +18,28 @@ CLASS_NAMES = [
 IMG_SIZE = 224
 
 # -----------------------------
-# Load model
+# Build Model Architecture
 # -----------------------------
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model("mobilenet_landcover.keras")
+
+    base_model = MobileNetV2(
+        weights=None,
+        include_top=False,
+        input_shape=(IMG_SIZE, IMG_SIZE, 3)
+    )
+
+    x = layers.GlobalAveragePooling2D()(base_model.output)
+    x = layers.Dropout(0.5)(x)
+    output = layers.Dense(len(CLASS_NAMES), activation='softmax')(x)
+
+    model = models.Model(inputs=base_model.input, outputs=output)
+
+    model.load_weights("mobilenet_landcover.weights.h5")
+
+    return model
 
 model = load_model()
-
-# Extract backbone and classifier
-backbone = model.layers[0]
-gap = model.layers[1]
-dropout = model.layers[2]
-dense = model.layers[3]
 
 # -----------------------------
 # Preprocess
@@ -40,37 +51,28 @@ def preprocess_image(image):
     return img_array.astype(np.float32)
 
 # -----------------------------
-# Grad-CAM (Stable Version)
+# Grad-CAM
 # -----------------------------
 def make_gradcam_heatmap(img_array):
 
-    # Get last conv layer from backbone
-    last_conv_layer = backbone.get_layer("out_relu")
+    last_conv_layer = model.get_layer("out_relu")
 
-    # Create a model from backbone input to last conv output
-    conv_model = tf.keras.Model(
-        inputs=backbone.input,
-        outputs=last_conv_layer.output
+    grad_model = tf.keras.models.Model(
+        [model.inputs],
+        [last_conv_layer.output, model.output]
     )
 
     with tf.GradientTape() as tape:
-        conv_output = conv_model(img_array)
-        tape.watch(conv_output)
-
-        # Forward pass through classifier manually
-        x = gap(conv_output)
-        x = dropout(x)
-        predictions = dense(x)
-
+        conv_outputs, predictions = grad_model(img_array)
         pred_index = tf.argmax(predictions[0])
         loss = predictions[:, pred_index]
 
-    grads = tape.gradient(loss, conv_output)
+    grads = tape.gradient(loss, conv_outputs)
 
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    conv_output = conv_output[0]
+    conv_outputs = conv_outputs[0]
 
-    heatmap = tf.reduce_sum(conv_output * pooled_grads, axis=-1)
+    heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
 
     heatmap = tf.maximum(heatmap, 0)
     heatmap /= tf.reduce_max(heatmap)
@@ -80,8 +82,7 @@ def make_gradcam_heatmap(img_array):
 # -----------------------------
 # UI
 # -----------------------------
-st.title("🛰️ Satellite Land Cover Classification")
-st.markdown("Upload an image and visualize Grad-CAM attention 🔥")
+st.title("🛰️ Satellite Land Cover Classification with Grad-CAM")
 
 uploaded_file = st.file_uploader("Upload Image", type=["jpg","jpeg","png"])
 
@@ -89,11 +90,11 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     img_array = preprocess_image(image)
 
-    col1, col2 = st.columns(2)
-
     predictions = model.predict(img_array)
     pred_index = np.argmax(predictions[0])
     confidence = float(np.max(predictions[0]))
+
+    col1, col2 = st.columns(2)
 
     with col1:
         st.image(image, use_container_width=True)
@@ -118,4 +119,4 @@ if uploaded_file:
 
     with col2:
         st.image(superimposed_img, use_container_width=True)
-        st.markdown("🔥 Red areas show model focus.")
+        st.markdown("🔥 Red areas show model focus")
