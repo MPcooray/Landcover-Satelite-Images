@@ -11,7 +11,7 @@ st.set_page_config(page_title="Satellite Land Cover Classification")
 
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model("landcover_model.h5")
+    return tf.keras.models.load_model("landcover_model.keras")
 
 model = load_model()
 
