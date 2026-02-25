@@ -6,9 +6,9 @@ import pandas as pd
 from PIL import Image
 from tensorflow.keras.models import Model
 
-# -------------------------------
+# ---------------------------------------------------
 # CONFIG
-# -------------------------------
+# ---------------------------------------------------
 st.set_page_config(page_title="Land Cover AI", layout="wide")
 
 IMG_SIZE = 224
@@ -26,9 +26,9 @@ class_names = [
     "SeaLake"
 ]
 
-# -------------------------------
-# LOAD MODEL
-# -------------------------------
+# ---------------------------------------------------
+# LOAD MODEL (.keras full model)
+# ---------------------------------------------------
 @st.cache_resource
 def load_model():
     model = tf.keras.models.load_model("mobilenet_landcover.keras")
@@ -36,13 +36,17 @@ def load_model():
 
 model = load_model()
 
-# -------------------------------
-# GRAD-CAM FUNCTION
-# -------------------------------
-def make_gradcam_heatmap(img_array, model, last_conv_layer_name="Conv_1"):
+# ---------------------------------------------------
+# GRAD-CAM FUNCTION (MobileNetV2)
+# ---------------------------------------------------
+def make_gradcam_heatmap(img_array, model, last_conv_layer_name="out_relu"):
+
+    # Extract base model (MobileNetV2)
+    base_model = model.layers[0]
+
     grad_model = Model(
-        inputs=model.inputs,
-        outputs=[model.get_layer(last_conv_layer_name).output, model.output],
+        inputs=model.input,
+        outputs=[base_model.get_layer(last_conv_layer_name).output, model.output],
     )
 
     with tf.GradientTape() as tape:
@@ -61,9 +65,9 @@ def make_gradcam_heatmap(img_array, model, last_conv_layer_name="Conv_1"):
     heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
     return heatmap.numpy()
 
-# -------------------------------
+# ---------------------------------------------------
 # UI HEADER
-# -------------------------------
+# ---------------------------------------------------
 st.markdown(
     "<h1 style='text-align:center;'>🛰 Satellite Land Cover Classification</h1>",
     unsafe_allow_html=True
@@ -71,15 +75,15 @@ st.markdown(
 
 st.markdown("---")
 
-# -------------------------------
-# LAYOUT
-# -------------------------------
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("📤 Upload Image")
+    st.subheader("📤 Upload Satellite Image")
     uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"])
 
+# ---------------------------------------------------
+# PREDICTION
+# ---------------------------------------------------
 if uploaded_file is not None:
 
     img = Image.open(uploaded_file).convert("RGB")
@@ -92,9 +96,11 @@ if uploaded_file is not None:
     class_idx = np.argmax(preds[0])
     confidence = np.max(preds[0])
 
+    # Show uploaded image
     with col1:
         st.image(img, caption="Uploaded Image", use_column_width=True)
 
+    # Show prediction
     with col2:
         st.subheader("🤖 Prediction Result")
         st.success(f"Predicted Class: **{class_names[class_idx]}**")
@@ -109,20 +115,21 @@ if uploaded_file is not None:
         st.subheader("📊 Class Probabilities")
         st.bar_chart(df.set_index("Class"))
 
-    # -------------------------------
+    # ---------------------------------------------------
     # GRAD-CAM VISUALIZATION
-    # -------------------------------
-    heatmap = make_gradcam_heatmap(img_array, model, "Conv_1")
+    # ---------------------------------------------------
+    heatmap = make_gradcam_heatmap(img_array, model, "out_relu")
 
     heatmap = cv2.resize(heatmap, (img.size[0], img.size[1]))
     heatmap = np.uint8(255 * heatmap)
-
     heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
     superimposed_img = heatmap * 0.4 + np.array(img)
+    superimposed_img = np.uint8(superimposed_img)
 
     st.markdown("---")
-    st.subheader("🔥 Grad-CAM Visualization")
-    st.image(superimposed_img.astype(np.uint8), use_column_width=True)
+    st.subheader("🔥 Grad-CAM Visualization (Model Attention)")
+    st.image(superimposed_img, use_column_width=True)
 
 else:
     st.info("Upload a satellite image to begin.")
