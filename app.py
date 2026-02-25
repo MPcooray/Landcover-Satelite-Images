@@ -1,41 +1,60 @@
 import streamlit as st
-import numpy as np
+st.set_page_config(page_title="Satellite Land Cover Classifier")
+
 import tensorflow as tf
-from tensorflow.keras.preprocessing import image
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras.applications import MobileNetV2
+import numpy as np
 from PIL import Image
 import json
 
-# MUST be first Streamlit command
-st.set_page_config(page_title="Satellite Land Cover Classification")
+IMG_SIZE = 224
+
+# Load class names
+with open("class_names.json", "r") as f:
+    class_names = json.load(f)
+
+# Build architecture EXACTLY like training
+def build_model():
+    base_model = MobileNetV2(
+        weights=None,   # IMPORTANT
+        include_top=False,
+        input_shape=(IMG_SIZE, IMG_SIZE, 3)
+    )
+
+    model = keras.Sequential([
+        base_model,
+        layers.GlobalAveragePooling2D(),
+        layers.Dropout(0.5),
+        layers.Dense(len(class_names), activation="softmax")
+    ])
+
+    return model
 
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model("landcover_model.keras")
+    model = build_model()
+    model.load_weights("mobilenet.weights.h5")
+    return model
 
 model = load_model()
 
-# Load class names
-with open("class_names.json") as f:
-    class_names = json.load(f)
+st.title("🛰 Satellite Land Cover Classification")
 
-st.title("🌍 Satellite Land Cover Classification")
-st.write("Upload a satellite image to classify land cover type.")
-
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png"])
+uploaded_file = st.file_uploader("Upload an image", type=["jpg", "png", "jpeg"])
 
 if uploaded_file is not None:
-    img = Image.open(uploaded_file).convert("RGB")
-    st.image(img, caption="Uploaded Image", use_column_width=True)
+    image = Image.open(uploaded_file).convert("RGB")
+    st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    img = img.resize((224, 224))
-    img_array = image.img_to_array(img)
-    img_array = preprocess_input(img_array)
+    img = image.resize((IMG_SIZE, IMG_SIZE))
+    img_array = np.array(img) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
 
-    prediction = model.predict(img_array)
-    predicted_class = class_names[np.argmax(prediction)]
-    confidence = float(np.max(prediction))
+    predictions = model.predict(img_array)
+    pred_index = np.argmax(predictions[0])
+    confidence = np.max(predictions[0])
 
-    st.success(f"Prediction: {predicted_class}")
-    st.info(f"Confidence: {confidence:.2f}")
+    st.subheader(f"Prediction: {class_names[pred_index]}")
+    st.write(f"Confidence: {confidence:.4f}")
