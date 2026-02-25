@@ -15,28 +15,47 @@ CLASS_NAMES = [
 
 IMG_SIZE = 224
 
+# -----------------------------
+# Load Saved Sequential Model
+# -----------------------------
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model("mobilenet_landcover.keras")
+    seq_model = tf.keras.models.load_model("mobilenet_landcover.keras")
+
+    # Extract backbone + classifier layers
+    backbone = seq_model.layers[0]
+    gap = seq_model.layers[1]
+    dropout = seq_model.layers[2]
+    dense = seq_model.layers[3]
+
+    # Rebuild clean Functional model
+    inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
+    x = backbone(inputs)
+    x = gap(x)
+    x = dropout(x)
+    outputs = dense(x)
+
+    clean_model = tf.keras.Model(inputs, outputs)
+    return clean_model
 
 model = load_model()
 
+# -----------------------------
+# Preprocess
+# -----------------------------
 def preprocess_image(image):
     image = image.resize((IMG_SIZE, IMG_SIZE))
     img_array = np.array(image) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array.astype(np.float32)
 
-# 🔥 Stable Grad-CAM
-def make_gradcam_heatmap(img_array, model):
+# -----------------------------
+# Grad-CAM (Now Safe)
+# -----------------------------
+def make_gradcam_heatmap(img_array):
 
-    # Get backbone (MobileNetV2)
-    base_model = model.layers[0]
-    last_conv_layer = base_model.get_layer("out_relu")
+    last_conv_layer = model.get_layer("mobilenetv2_1.00_224").get_layer("out_relu")
 
-    # Create a model that maps input to:
-    # 1. last conv layer output
-    # 2. final prediction
     grad_model = tf.keras.models.Model(
         inputs=model.input,
         outputs=[last_conv_layer.output, model.output]
@@ -50,8 +69,8 @@ def make_gradcam_heatmap(img_array, model):
     grads = tape.gradient(loss, conv_outputs)
 
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-
     conv_outputs = conv_outputs[0]
+
     heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
 
     heatmap = tf.maximum(heatmap, 0)
@@ -59,6 +78,9 @@ def make_gradcam_heatmap(img_array, model):
 
     return heatmap.numpy()
 
+# -----------------------------
+# UI
+# -----------------------------
 st.title("🛰️ Satellite Land Cover Classification")
 st.markdown("Upload an image and visualize Grad-CAM attention 🔥")
 
@@ -85,7 +107,7 @@ if uploaded_file:
         })
         st.bar_chart(df.set_index("Class"))
 
-    heatmap = make_gradcam_heatmap(img_array, model)
+    heatmap = make_gradcam_heatmap(img_array)
 
     heatmap = cv2.resize(heatmap, (IMG_SIZE, IMG_SIZE))
     heatmap = np.uint8(255 * heatmap)
