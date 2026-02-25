@@ -5,7 +5,13 @@ import cv2
 import pandas as pd
 from PIL import Image
 
-st.set_page_config(page_title="Satellite Land Cover AI", layout="wide")
+# --------------------------------
+# Page Config
+# --------------------------------
+st.set_page_config(
+    page_title="Satellite Land Cover AI",
+    layout="wide"
+)
 
 CLASS_NAMES = [
     'AnnualCrop', 'Forest', 'HerbaceousVegetation',
@@ -15,21 +21,33 @@ CLASS_NAMES = [
 
 IMG_SIZE = 224
 
+# --------------------------------
+# Load Model (Full Saved Model)
+# --------------------------------
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model("final_model.keras", compile=False)
+    return tf.keras.models.load_model(
+        "FINAL_DEPLOY_MODEL.keras",
+        compile=False
+    )
 
 model = load_model()
 
+# --------------------------------
+# Image Preprocessing
+# --------------------------------
 def preprocess_image(image):
     image = image.resize((IMG_SIZE, IMG_SIZE))
     img_array = np.array(image) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array.astype(np.float32)
 
+# --------------------------------
+# Grad-CAM
+# --------------------------------
 def make_gradcam_heatmap(img_array):
 
-    # Find last convolution layer automatically
+    # Automatically find last Conv2D layer
     last_conv_layer = None
     for layer in reversed(model.layers):
         if isinstance(layer, tf.keras.layers.Conv2D):
@@ -37,8 +55,8 @@ def make_gradcam_heatmap(img_array):
             break
 
     grad_model = tf.keras.models.Model(
-        [model.inputs],
-        [last_conv_layer.output, model.output]
+        inputs=model.inputs,
+        outputs=[last_conv_layer.output, model.output]
     )
 
     with tf.GradientTape() as tape:
@@ -52,14 +70,21 @@ def make_gradcam_heatmap(img_array):
     conv_outputs = conv_outputs[0]
 
     heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
+
     heatmap = tf.maximum(heatmap, 0)
     heatmap /= tf.reduce_max(heatmap)
 
     return heatmap.numpy()
 
+# --------------------------------
+# UI
+# --------------------------------
 st.title("🛰️ Satellite Land Cover Classification with Grad-CAM")
 
-uploaded_file = st.file_uploader("Upload Image", type=["jpg","jpeg","png"])
+uploaded_file = st.file_uploader(
+    "Upload a Satellite Image",
+    type=["jpg", "jpeg", "png"]
+)
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
@@ -71,6 +96,7 @@ if uploaded_file:
 
     col1, col2 = st.columns(2)
 
+    # ---- Left Side ----
     with col1:
         st.image(image, use_container_width=True)
         st.markdown(f"### Prediction: `{CLASS_NAMES[pred_index]}`")
@@ -80,8 +106,10 @@ if uploaded_file:
             "Class": CLASS_NAMES,
             "Probability": predictions[0]
         })
+
         st.bar_chart(df.set_index("Class"))
 
+    # ---- Right Side (Grad-CAM) ----
     heatmap = make_gradcam_heatmap(img_array)
 
     heatmap = cv2.resize(heatmap, (IMG_SIZE, IMG_SIZE))
